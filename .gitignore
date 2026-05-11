@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.cache/
+data/chroma/
+data/pdfs/
+data/docs/
+*.db
