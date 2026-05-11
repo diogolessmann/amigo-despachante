@@ -183,7 +183,7 @@
       </div>
     </div>
     <div class="header-stats">
-      <div class="stat-dot"></div>
+      <div class="stat-dot" id="stat-dot"></div>
       <span id="stat-chunks">{{ stats.chunks }}</span> trechos indexados
     </div>
   </div>
@@ -226,6 +226,18 @@
 <script>
 let historico = [];
 let carregando = false;
+
+// ── Atualiza stats dinamicamente ao carregar ──────────────────────────────
+(async function atualizaStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const s = await r.json();
+    document.getElementById('stat-chunks').textContent = s.chunks;
+    // Verde se tem dados, laranja se vazio
+    const dot = document.getElementById('stat-dot');
+    if (dot) dot.style.background = s.chunks > 0 ? 'var(--green)' : 'var(--accent)';
+  } catch(e) {}
+})();
 
 // ── Auto-resize textarea ──────────────────────────────────────────────────────
 function autoResize(el) {
