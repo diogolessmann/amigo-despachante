@@ -48,7 +48,7 @@
 <body>
 
 <h1>🔧 Amigo Despachante — Dev & Roadmap</h1>
-<p class="sub">Página privada · Só você tem acesso · <a href="/dashboard" style="color:#f5a623">← Voltar ao sistema</a> · <a href="/dev/sair" style="color:#666">Sair</a></p>
+<p class="sub">Página privada · Só você tem acesso · <a href="/dashboard" style="color:#f5a623">← Voltar ao sistema</a></p>
 
 <!-- PROGRESSO GERAL -->
 <div class="stats">
@@ -125,7 +125,7 @@
     {% endfor %}
   {% endif %}
 
-  <form method="POST" action="/dev/nota">
+  <form method="POST" action="/dev/{{ token }}/nota">
     <input type="text" name="titulo" placeholder="Título rápido (ex: Bug no formulário de OS)" style="width:100%;background:#111;border:1px solid #333;border-radius:8px;color:#e8e8e8;padding:10px 12px;font-size:13px;font-family:inherit;outline:none;margin-bottom:8px">
     <textarea name="texto" placeholder="Escreve aqui tudo que precisa mudar, melhorar ou corrigir...&#10;&#10;Ex:&#10;- O campo de placa não valida formato&#10;- Precisa de um botão de impressão na OS&#10;- Procuração modelo 3 está errada..."></textarea>
     <button class="btn-salvar" type="submit">💾 Salvar anotação</button>
