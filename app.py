@@ -22,7 +22,8 @@ from db  import (init_db, stats_dashboard, SERVICOS, SERVICOS_GRUPOS, FINAIS_PLA
                  atualizar_os_status, criar_cliente, get_cliente, atualizar_cliente,
                  buscar_cliente_cpf, criar_veiculo,
                  buscar_veiculo_placa, get_documentos_os,
-                 salvar_nota_dev, listar_notas_dev)
+                 salvar_nota_dev, listar_notas_dev,
+                 lista_final_placa, listar_exercicios, atualizar_situacao_pag)
 from datetime import datetime
 
 # ── Config despachante (injetado em todos os templates) ─────────────────────
@@ -164,6 +165,8 @@ def nova_os():
             "pago":            float(f.get("pago") or 0),
             "forma_pagamento": f.get("forma_pagamento",""),
             "observacoes":     f.get("observacoes",""),
+            "exercicio":       int(f.get("exercicio") or datetime.now().year),
+            "situacao_pag":    f.get("situacao_pag",""),
         }
         os_id = criar_os(dados_os)
         return redirect(url_for("detalhe_os", id=os_id))
@@ -205,8 +208,166 @@ def editar_os(id):
         "pago":            float(f.get("pago") or 0),
         "forma_pagamento": f.get("forma_pagamento",""),
         "observacoes":     f.get("observacoes",""),
+        "exercicio":       int(f.get("exercicio") or datetime.now().year),
+        "situacao_pag":    f.get("situacao_pag",""),
     })
     return redirect(url_for("detalhe_os", id=id))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LISTA POR FINAL DE PLACA
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/lista")
+def lista_placa():
+    final    = request.args.get("final", "5")           # dígito final da placa
+    exercicio = request.args.get("exercicio", datetime.now().year, type=int)
+    situacao  = request.args.get("situacao", "")        # '' | pendente | concluido
+    ordens    = lista_final_placa(final, exercicio, situacao or None)
+    exercicios = listar_exercicios()
+    # Garante que o ano atual sempre aparece na lista
+    if datetime.now().year not in exercicios:
+        exercicios.insert(0, datetime.now().year)
+    # Conta pendentes / concluídos
+    pendentes  = sum(1 for o in ordens if o["status"] not in ("concluida","cancelada"))
+    concluidos = sum(1 for o in ordens if o["status"] == "concluida")
+    mes_placa  = MESES[FINAIS_PLACA.get(final, 0)]
+    return render_template("lista_placa.html",
+        ordens=ordens, final=final, exercicio=exercicio,
+        situacao=situacao, exercicios=exercicios,
+        pendentes=pendentes, concluidos=concluidos,
+        mes_placa=mes_placa,
+        total=len(ordens))
+
+
+@app.route("/lista/csv")
+def lista_placa_csv():
+    import csv, io
+    final     = request.args.get("final", "5")
+    exercicio = request.args.get("exercicio", datetime.now().year, type=int)
+    situacao  = request.args.get("situacao", "")
+    ordens    = lista_final_placa(final, exercicio, situacao or None)
+
+    def _situacao_label(o):
+        if o.get("situacao_pag"):
+            return o["situacao_pag"]
+        s = o.get("status", "")
+        if s == "concluida":
+            return "CONCLUÍDO"
+        if s == "cancelada":
+            return "CANCELADO"
+        return "AGUARDANDO PAGAMENTO"
+
+    buf = io.StringIO()
+    w   = csv.writer(buf)
+    w.writerow(["nome", "cpf", "renavam", "placa", "exercicio", "telefone", "situacao", "os_id"])
+    for o in ordens:
+        # Normaliza telefone para MandaZap (só dígitos com 55)
+        tel = (o.get("telefone") or "").replace("(","").replace(")","").replace("-","").replace(" ","")
+        if tel and not tel.startswith("55"):
+            tel = "55" + tel
+        w.writerow([
+            o.get("cliente",""),
+            o.get("cpf",""),
+            o.get("renavam",""),
+            o.get("placa",""),
+            o.get("exercicio",""),
+            tel,
+            _situacao_label(o),
+            o.get("os_id",""),
+        ])
+    buf.seek(0)
+    from flask import Response
+    filename = f"final{final}_ex{exercicio}.csv"
+    return Response(buf.getvalue(), mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@app.route("/lista/situacao/<int:os_id>", methods=["POST"])
+def set_situacao_pag(os_id):
+    situacao = request.get_json(silent=True) or {}
+    atualizar_situacao_pag(os_id, situacao.get("situacao_pag",""))
+    return jsonify({"ok": True})
+
+
+@app.route("/lista/disparar", methods=["POST"])
+def lista_disparar():
+    """Dispara mensagem WhatsApp para todos os contatos da lista via Evolution API."""
+    import time
+    try:
+        import requests as _req
+    except ImportError:
+        return jsonify({"erro": "requests não instalado"}), 500
+
+    data         = request.get_json(silent=True) or {}
+    final        = data.get("final", "5")
+    exercicio    = data.get("exercicio", datetime.now().year)
+    situacao     = data.get("situacao", "pendente")
+    mensagem_tpl = data.get("mensagem", "").strip()
+    delay_s      = max(1, min(30, int(data.get("delay", 4))))
+
+    if not mensagem_tpl:
+        return jsonify({"erro": "Mensagem não pode estar vazia"}), 400
+
+    evo_url      = os.environ.get("EVO_URL", "").rstrip("/")
+    evo_key      = os.environ.get("EVO_KEY", "")
+    evo_instance = os.environ.get("EVO_INSTANCE", "")
+
+    if not evo_url or not evo_key or not evo_instance:
+        return jsonify({"erro":
+            "WhatsApp não configurado. Preencha EVO_URL, EVO_KEY e EVO_INSTANCE no arquivo .env"}), 400
+
+    ordens  = lista_final_placa(final, int(exercicio), situacao or None)
+    mes_str = MESES[FINAIS_PLACA.get(final, 0)]
+
+    results = []
+    for o in ordens:
+        # Normaliza telefone → 55 + DDD + número (só dígitos)
+        tel = (o.get("telefone") or "").replace("(","").replace(")","").replace("-","").replace(" ","").replace("+","")
+        if not tel:
+            results.append({"nome": o.get("cliente","?"), "status": "sem_telefone"})
+            continue
+        if not tel.startswith("55"):
+            tel = "55" + tel
+
+        nome_curto = (o.get("cliente") or "Cliente").split()[0].title()
+        try:
+            msg = mensagem_tpl.format(
+                nome       = nome_curto,
+                nome_completo = (o.get("cliente") or "").title(),
+                placa      = (o.get("placa") or "").upper(),
+                exercicio  = o.get("exercicio") or exercicio,
+                mes        = mes_str,
+                despachante= DESPACHANTE["nome"].title(),
+                whatsapp   = DESPACHANTE["whatsapp_fmt"],
+                cidade     = DESPACHANTE["cidade"],
+            )
+        except KeyError as e:
+            return jsonify({"erro": f"Variável inválida na mensagem: {e}. Use apenas: {{nome}}, {{placa}}, {{exercicio}}, {{mes}}, {{despachante}}, {{whatsapp}}, {{cidade}}"}), 400
+
+        try:
+            resp = _req.post(
+                f"{evo_url}/message/sendText/{evo_instance}",
+                headers={"apikey": evo_key, "Content-Type": "application/json"},
+                json={"number": tel, "text": msg},
+                timeout=12,
+            )
+            ok = resp.status_code in (200, 201)
+            results.append({
+                "nome":  o.get("cliente",""),
+                "tel":   tel,
+                "status": "ok" if ok else "erro",
+                "detalhe": "" if ok else resp.text[:120],
+            })
+        except Exception as e:
+            results.append({"nome": o.get("cliente",""), "tel": tel, "status": "erro", "detalhe": str(e)[:120]})
+
+        time.sleep(delay_s)
+
+    sent   = sum(1 for r in results if r["status"] == "ok")
+    failed = sum(1 for r in results if r["status"] != "ok")
+    log.info(f"Campanha Final {final} Ex{exercicio}: {sent} enviados, {failed} falhas")
+    return jsonify({"sent": sent, "failed": failed, "results": results})
 
 
 # ══════════════════════════════════════════════════════════════════════════════

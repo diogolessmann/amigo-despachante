@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+
+{% block title %}IA Amigo · Lessmann{% endblock %}
+{% block topbar_title %}🤖 IA Amigo Despachante{% endblock %}
+{% block topbar_actions %}
+  <button class="btn btn-ghost btn-sm" onclick="limparChat()">🗑️ Limpar</button>
+  {% if rag_stats and rag_stats.chunks %}
+  <span class="badge badge-green">{{ rag_stats.chunks }} trechos indexados</span>
+  {% else %}
+  <span class="badge badge-gray">Base de conhecimento vazia</span>
+  {% endif %}
+{% endblock %}
+
+{% block extra_style %}
+.chat-layout {
+  display: flex; flex-direction: column;
+  height: calc(100vh - 52px - 48px); /* viewport - topbar - content padding */
+  max-width: 800px; margin: 0 auto;
+}
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 4px 0;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.msg {
+  display: flex; gap: 10px; align-items: flex-start;
+  animation: fadeUp .2s ease;
+}
+.msg.user { flex-direction: row-reverse; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+
+.msg-avatar {
+  width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.msg.bot  .msg-avatar { background: rgba(249,115,22,.15); }
+.msg.user .msg-avatar { background: rgba(59,130,246,.15); }
+
+.msg-bubble {
+  max-width: 75%; padding: 10px 14px; border-radius: 12px; font-size: 13px;
+  line-height: 1.6;
+}
+.msg.bot  .msg-bubble { background: var(--surface2); border: 1px solid var(--border); border-top-left-radius: 4px; }
+.msg.user .msg-bubble { background: rgba(59,130,246,.15); border: 1px solid rgba(59,130,246,.25); border-top-right-radius: 4px; color: #93c5fd; }
+
+.msg-bubble p { margin-bottom: 6px; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble ul, .msg-bubble ol { padding-left: 18px; margin: 6px 0; }
+.msg-bubble li { margin-bottom: 3px; }
+.msg-bubble strong { color: var(--text); }
+.msg-bubble code { background: var(--surface3); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.msg-bubble pre { background: var(--surface3); padding: 10px; border-radius: 8px; overflow-x: auto; margin: 8px 0; font-size: 12px; }
+
+.msg-sources {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text3);
+}
+.msg-sources details summary { cursor: pointer; color: var(--text2); }
+.source-item { margin: 4px 0; padding: 4px 8px; background: var(--surface3); border-radius: 5px; }
+
+.chat-input-wrap {
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-input-row {
+  display: flex; gap: 8px; align-items: flex-end;
+}
+.chat-input-row textarea {
+  flex: 1; padding: 10px 14px; background: var(--surface2);
+  border: 1px solid var(--border2); border-radius: 10px;
+  color: var(--text); font-size: 13px; font-family: inherit;
+  outline: none; resize: none; min-height: 44px; max-height: 150px;
+  transition: border-color .15s;
+}
+.chat-input-row textarea:focus { border-color: var(--accent); }
+.send-btn {
+  width: 44px; height: 44px; border-radius: 10px; border: none;
+  background: var(--accent); color: #fff; cursor: pointer;
+  font-size: 18px; flex-shrink: 0; transition: all .15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.send-btn:hover { background: var(--accent2); }
+.send-btn:disabled { background: var(--surface3); cursor: not-allowed; }
+
+.typing-indicator {
+  display: none; align-items: center; gap: 8px;
+  padding: 8px 0; font-size: 12px; color: var(--text3);
+}
+.typing-indicator.show { display: flex; }
+.typing-dots span {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: dot-bounce 1.2s infinite;
+}
+.typing-dots span:nth-child(2) { animation-delay: .2s; }
+.typing-dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes dot-bounce { 0%,80%,100%{transform:scale(0.8);opacity:.4} 40%{transform:scale(1.1);opacity:1} }
+
+.quick-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip {
+  padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+  background: var(--surface2); border: 1px solid var(--border2); color: var(--text2);
+  cursor: pointer; transition: all .15s;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+
+.rag-empty {
+  background: rgba(234,179,8,.08); border: 1px solid rgba(234,179,8,.2);
+  border-radius: 10px; padding: 14px; margin-bottom: 14px; font-size: 13px;
+  color: #fde68a;
+}
+{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+  <!-- RAG warning -->
+  {% if not rag_stats or rag_stats.chunks == 0 %}
+  <div class="rag-empty">
+    ⚠️ <strong>Base de conhecimento vazia.</strong>
+    Acesse <a href="{{ url_for('chat_page') }}" style="color:var(--accent);">Configurações</a>
+    ou faça upload de PDFs do DETRAN-SC para o IA aprender sobre os processos.
+    Mesmo sem ela, o IA pode responder perguntas gerais sobre despachante.
+  </div>
+  {% endif %}
+
+  <!-- Messages -->
+  <div class="chat-messages" id="messages">
+    <!-- Welcome message -->
+    <div class="msg bot">
+      <div class="msg-avatar">🤖</div>
+      <div class="msg-bubble">
+        <strong>Olá! Sou o Amigo Despachante.</strong><br>
+        Posso ajudar com dúvidas sobre processos do DETRAN-SC, transferências, licenciamentos,
+        requerimentos e muito mais. O que você precisa saber?
+        {% if rag_stats and rag_stats.chunks %}
+        <br><br>
+        <small style="color:var(--text3);">📚 Base de conhecimento com {{ rag_stats.chunks }} trechos indexados.</small>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Typing indicator -->
+  <div class="typing-indicator" id="typing">
+    <div class="msg-avatar" style="width:32px;height:32px;border-radius:10px;background:rgba(249,115,22,.15);display:flex;align-items:center;justify-content:center;font-size:16px;">🤖</div>
+    <div>
+      <div class="typing-dots"><span></span><span></span><span></span></div>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="chat-input-wrap">
+    <!-- Quick chips -->
+    <div class="quick-chips" id="quick-chips">
+      <span class="chip" onclick="enviarChip(this)">📋 Documentos para transferência</span>
+      <span class="chip" onclick="enviarChip(this)">🔢 Finais de placa SC</span>
+      <span class="chip" onclick="enviarChip(this)">🆕 Primeiro emplacamento</span>
+      <span class="chip" onclick="enviarChip(this)">🚗 Baixa de veículo</span>
+      <span class="chip" onclick="enviarChip(this)">📝 Procuração veicular</span>
+      <span class="chip" onclick="enviarChip(this)">💰 Tabela FIPE</span>
+    </div>
+    <div class="chat-input-row">
+      <textarea id="input" placeholder="Digite sua pergunta sobre DETRAN-SC, documentos, processos..."
+                rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      <button class="send-btn" id="send-btn" onclick="enviar()" title="Enviar (Enter)">➤</button>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px;text-align:center;">
+      Enter para enviar · Shift+Enter para nova linha
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+let historico = [];
+let enviando = false;
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    enviar();
+  }
+}
+
+function enviarChip(el) {
+  document.getElementById('input').value = el.textContent.replace(/^[^\s]+\s/, '').trim();
+  document.getElementById('quick-chips').style.display = 'none';
+  enviar();
+}
+
+function limparChat() {
+  historico = [];
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = `
+    <div class="msg bot">
+      <div class="msg-avatar">🤖</div>
+      <div class="msg-bubble">
+        <strong>Conversa reiniciada.</strong> Como posso ajudar?
+      </div>
+    </div>`;
+  document.getElementById('quick-chips').style.display = 'flex';
+}
+
+async function enviar() {
+  if (enviando) return;
+  const inp = document.getElementById('input');
+  const pergunta = inp.value.trim();
+  if (!pergunta) return;
+
+  enviando = true;
+  inp.value = '';
+  inp.style.height = 'auto';
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('quick-chips').style.display = 'none';
+
+  appendMsg('user', pergunta);
+  document.getElementById('typing').classList.add('show');
+  scrollBottom();
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ pergunta, historico }),
+    });
+    const data = await res.json();
+
+    document.getElementById('typing').classList.remove('show');
+
+    if (data.erro) {
+      appendMsg('bot', '❌ Erro: ' + data.erro);
+    } else {
+      const fontes = data.fontes || [];
+      appendMsg('bot', data.resposta, fontes);
+      historico = data.historico_atualizado || [...historico, {role:'user',content:pergunta}, {role:'assistant',content:data.resposta}];
+      // Keep history limited to 10 turns
+      if (historico.length > 20) historico = historico.slice(-20);
+    }
+  } catch(e) {
+    document.getElementById('typing').classList.remove('show');
+    appendMsg('bot', '❌ Falha ao conectar com o servidor. Tente novamente.');
+  }
+
+  enviando = false;
+  document.getElementById('send-btn').disabled = false;
+  inp.focus();
+  scrollBottom();
+}
+
+function appendMsg(role, text, fontes) {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  const avatar = role === 'bot' ? '🤖' : '👤';
+
+  let html = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">`;
+  // Convert markdown-like formatting
+  const formatted = text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n- /g, '<br>• ')
+    .replace(/\n/g, '<br>');
+  html += '<p>' + formatted + '</p>';
+
+  if (fontes && fontes.length) {
+    html += `<div class="msg-sources"><details><summary>📚 ${fontes.length} fonte(s)</summary>`;
+    fontes.forEach(f => {
+      html += `<div class="source-item">${f.fonte || ''} — <em>${(f.trecho||'').substring(0,120)}...</em></div>`;
+    });
+    html += '</details></div>';
+  }
+
+  html += '</div>';
+  div.innerHTML = html;
+  msgs.appendChild(div);
+}
+
+function scrollBottom() {
+  const msgs = document.getElementById('messages');
+  setTimeout(() => msgs.scrollTop = msgs.scrollHeight, 50);
+}
+
+// Upload de PDF
+function uploadPdf() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.doc,.docx';
+  input.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('pdf', file);
+    appendMsg('bot', `⏳ Processando "${file.name}"...`);
+    scrollBottom();
+    try {
+      const r = await fetch('/api/upload', { method:'POST', body:fd });
+      const d = await r.json();
+      if (d.erro) appendMsg('bot', '❌ ' + d.erro);
+      else appendMsg('bot', `✅ "${file.name}" está sendo indexado. Em alguns instantes estará disponível na base de conhecimento.`);
+    } catch { appendMsg('bot', '❌ Erro ao enviar arquivo.'); }
+    scrollBottom();
+  };
+  input.click();
+}
+
+document.getElementById('input').focus();
+</script>
+{% endblock %}

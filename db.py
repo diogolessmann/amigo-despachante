@@ -265,6 +265,20 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # ── Migrations suaves (colunas adicionadas depois do CREATE inicial) ────────
+    _migrations = [
+        "ALTER TABLE ordens_servico ADD COLUMN exercicio INTEGER",
+        "ALTER TABLE ordens_servico ADD COLUMN situacao_pag TEXT DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_os_exercicio ON ordens_servico(exercicio)",
+    ]
+    for sql in _migrations:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # Já existe — ok
+
     conn.close()
 
 # ── Número de O.S. ───────────────────────────────────────────────────────────
@@ -370,13 +384,15 @@ def criar_os(dados: dict) -> int:
     conn = get_conn()
     dados["numero"] = _novo_numero_os(conn)
     dados.setdefault("status", "aberta")
+    dados.setdefault("exercicio", datetime.now().year)
+    dados.setdefault("situacao_pag", "")
     dados["total"] = float(dados.get("honorarios",0)) + float(dados.get("custos",0))
     cur = conn.execute("""
         INSERT INTO ordens_servico
             (numero,cliente_id,veiculo_id,servico,status,honorarios,
-             custos,total,pago,forma_pagamento,observacoes)
+             custos,total,pago,forma_pagamento,observacoes,exercicio,situacao_pag)
         VALUES (:numero,:cliente_id,:veiculo_id,:servico,:status,:honorarios,
-                :custos,:total,:pago,:forma_pagamento,:observacoes)
+                :custos,:total,:pago,:forma_pagamento,:observacoes,:exercicio,:situacao_pag)
     """, dados)
     conn.commit()
     id_ = cur.lastrowid
@@ -390,6 +406,7 @@ def get_os(id_: int) -> dict | None:
           os.id, os.numero, os.cliente_id, os.veiculo_id, os.servico, os.status,
           os.honorarios, os.custos, os.total, os.pago, os.forma_pagamento,
           os.observacoes, os.criado_em, os.atualizado_em, os.concluido_em,
+          os.exercicio, os.situacao_pag,
           c.nome       AS cliente_nome,
           c.cpf,       c.cnpj,      c.rg,     c.nascimento,  c.nome_mae,
           c.telefone,  c.email,     c.cep,    c.logradouro,
@@ -455,12 +472,15 @@ def atualizar_os(id_: int, dados: dict):
     dados["total"] = float(dados.get("honorarios",0)) + float(dados.get("custos",0))
     dados["id"]    = id_
     dados["atualizado_em"] = datetime.now().isoformat()
+    dados.setdefault("exercicio", datetime.now().year)
+    dados.setdefault("situacao_pag", "")
     conn = get_conn()
     conn.execute("""
         UPDATE ordens_servico
         SET servico=:servico, honorarios=:honorarios, custos=:custos,
             total=:total, pago=:pago, forma_pagamento=:forma_pagamento,
-            observacoes=:observacoes, atualizado_em=:atualizado_em
+            observacoes=:observacoes, atualizado_em=:atualizado_em,
+            exercicio=:exercicio, situacao_pag=:situacao_pag
         WHERE id=:id
     """, dados)
     conn.commit()
@@ -533,6 +553,73 @@ def listar_notas_dev() -> list:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def listar_exercicios() -> list:
+    """Anos de exercício distintos registrados nas O.S."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT exercicio FROM ordens_servico "
+        "WHERE exercicio IS NOT NULL ORDER BY exercicio DESC"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def lista_final_placa(final: str, exercicio: int = None, situacao: str = None) -> list:
+    """
+    Retorna todas as O.S. de licenciamento cujo veículo termina com *final*,
+    opcionalmente filtradas por exercício e situação de pagamento.
+    """
+    SERVICOS_LICEN = (
+        'licenciamento','lic_debitos','lic_outro_municipio',
+        'lic_outro_estado','boleto_divida_ativa','segunda_via_crv','pedido_etiquetas',
+    )
+    placeholders = ",".join("?" * len(SERVICOS_LICEN))
+    where  = [f"substr(replace(v.placa,'-',''), -1, 1) = ?",
+              f"os.servico IN ({placeholders})"]
+    params = [final, *SERVICOS_LICEN]
+
+    if exercicio:
+        where.append("os.exercicio = ?")
+        params.append(exercicio)
+    if situacao == "pendente":
+        where.append("os.status NOT IN ('concluida','cancelada')")
+    elif situacao == "concluido":
+        where.append("os.status = 'concluida'")
+
+    conn = get_conn()
+    rows = conn.execute(f"""
+        SELECT
+            c.nome        AS cliente,
+            c.cpf,
+            v.renavam,
+            v.placa,
+            os.exercicio,
+            c.telefone,
+            os.status,
+            os.situacao_pag,
+            os.id         AS os_id,
+            os.numero
+        FROM ordens_servico os
+        LEFT JOIN veiculos  v ON v.id = os.veiculo_id
+        LEFT JOIN clientes  c ON c.id = os.cliente_id
+        WHERE {' AND '.join(where)}
+        ORDER BY c.nome COLLATE NOCASE
+    """, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def atualizar_situacao_pag(os_id: int, situacao_pag: str):
+    """Atualiza somente o campo situacao_pag de uma O.S."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE ordens_servico SET situacao_pag=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?",
+        (situacao_pag, os_id)
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_documentos_os(os_id: int) -> list:

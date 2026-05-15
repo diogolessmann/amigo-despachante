@@ -246,7 +246,7 @@ def search(query: str, n_results: int = 5) -> list:
         results["distances"][0],
     ):
         relevance = 1 - dist   # cosine → quanto maior, mais relevante
-        if relevance > 0.3:    # filtra irrelevantes
+        if relevance > 0.15:   # filtra irrelevantes
             chunks.append({
                 "text":      doc,
                 "source":    meta.get("source", ""),
@@ -257,17 +257,30 @@ def search(query: str, n_results: int = 5) -> list:
 
 
 # ── Geração de resposta ───────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Você é o Amigo Despachante SC, um assistente especializado nos
-procedimentos do DETRAN/SC para auxiliar funcionários de escritórios de despachantes.
+SYSTEM_PROMPT = """Você é o Amigo Despachante SC — assistente especializado em documentação
+veicular, processos do DETRAN/SC, despachante documentalista e tudo relacionado ao
+Código de Trânsito Brasileiro.
 
-Regras:
-- Responda SEMPRE em português brasileiro
-- Baseie suas respostas nos documentos fornecidos no contexto
-- Se a resposta estiver no contexto, cite de qual documento/página veio
-- Se não encontrar a informação, diga claramente e sugira consultar o site do DETRAN/SC
-- Seja direto, prático e use listas quando possível
-- Quando solicitado, gere requerimentos/checklists formatados
-- Nunca invente informações que não estejam no contexto"""
+Você trabalha para o escritório de Diogo Kaue Lessmann, Despachante credenciado DETRAN-SC
+nº 2095, localizado em Schroeder/SC — CITRAN Guaramirim.
+
+COMO RESPONDER:
+1. PRIORIZE os documentos do CONTEXTO quando eles tiverem a informação — mencione a fonte
+2. Se os documentos não cobrirem o assunto, USE SEU CONHECIMENTO GERAL sobre
+   despachante, DETRAN/SC e documentação veicular para responder de forma útil
+3. Nunca diga apenas "não encontrei" — sempre tente ajudar com o que sabe
+4. Quando não tiver certeza de algo específico (tabela de taxas atualizada, datas), sinalize
+
+ESTILO:
+- Português brasileiro, direto e prático
+- Use listas e checklists quando listar documentos ou etapas
+- Tom profissional mas acessível — como um colega experiente de escritório
+- Quando solicitado, gere modelos de requerimentos, textos de procuração, checklists
+
+CONTEXTO DO ESCRITÓRIO:
+- CNPJ: 28.858.795/0001-92 | CPF: 060.625.099-99
+- Atende: Schroeder, Guaramirim, Jaraguá do Sul e região de SC
+- Serviços: transferências, licenciamentos, alterações, CNH, ANTT, procurações, etc."""
 
 
 def chat(pergunta: str, historico: list = None) -> dict:
@@ -278,23 +291,29 @@ def chat(pergunta: str, historico: list = None) -> dict:
     historico = historico or []
 
     # 1. Busca contexto relevante
-    chunks = search(pergunta, n_results=5)
+    chunks = search(pergunta, n_results=7)
 
     # 2. Monta contexto para o LLM
     if chunks:
         contexto = "\n\n---\n\n".join([
-            f"[{c['source']} — pág. {c['page']}]\n{c['text']}"
+            f"[Fonte: {c['source']} | relevância: {c['relevance']}]\n{c['text']}"
             for c in chunks
         ])
-        context_msg = f"\n\nCONTEXTO DOS DOCUMENTOS DETRAN/SC:\n{contexto}\n\n"
+        context_msg = (
+            f"\n\nDOCUMENTOS DISPONÍVEIS (use quando relevantes para a pergunta):\n"
+            f"{contexto}\n\n"
+        )
     else:
-        context_msg = "\n\n[Nenhum documento encontrado para essa consulta. Base de dados pode estar vazia.]\n\n"
+        context_msg = (
+            "\n\n[Nenhum documento específico encontrado na base. "
+            "Responda com seu conhecimento geral sobre o assunto.]\n\n"
+        )
 
     # 3. Monta mensagens
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # Adiciona histórico (últimas 6 mensagens para não esgotar contexto)
-    for msg in historico[-6:]:
+    # Adiciona histórico (últimas 10 mensagens)
+    for msg in historico[-10:]:
         messages.append(msg)
 
     # Pergunta atual com contexto injetado
@@ -308,8 +327,8 @@ def chat(pergunta: str, historico: list = None) -> dict:
     response    = groq_client.chat.completions.create(
         model       = MODEL_CHAT,
         messages    = messages,
-        temperature = 0.2,    # baixo = mais preciso/factual
-        max_tokens  = 1024,
+        temperature = 0.3,
+        max_tokens  = 2048,
     )
 
     resposta = response.choices[0].message.content
