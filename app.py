@@ -3,7 +3,7 @@ app.py — Despachante Lessmann · Sistema Gerenciador + IA
 """
 import logging, os, threading
 from flask import (Flask, render_template, request, jsonify,
-                   redirect, url_for, abort, flash)
+                   redirect, url_for, abort, flash, session)
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
@@ -21,7 +21,8 @@ from db  import (init_db, stats_dashboard, SERVICOS, SERVICOS_GRUPOS, FINAIS_PLA
                  STATUS_LABELS, criar_os, get_os, listar_os, atualizar_os,
                  atualizar_os_status, criar_cliente, get_cliente, atualizar_cliente,
                  buscar_cliente_cpf, criar_veiculo,
-                 buscar_veiculo_placa, get_documentos_os)
+                 buscar_veiculo_placa, get_documentos_os,
+                 salvar_nota_dev, listar_notas_dev)
 from datetime import datetime
 
 # ── Config despachante (injetado em todos os templates) ─────────────────────
@@ -396,6 +397,46 @@ IMPORTANTE: Retorne SOMENTE o JSON, nada mais."""
     except Exception as e:
         log.error(f"OCR error: {e}")
         return jsonify({"erro": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEV — Página privada de roadmap e anotações
+# ══════════════════════════════════════════════════════════════════════════════
+
+DEV_PASSWORD = os.environ.get("DEV_PASSWORD", "lessmann2026")
+
+@app.route("/dev", methods=["GET", "POST"])
+def dev_page():
+    # Login via POST (senha no form)
+    if request.method == "POST":
+        if request.form.get("senha") == DEV_PASSWORD:
+            session["dev_ok"] = True
+            return redirect(url_for("dev_page"))
+        return render_template("dev_login.html", erro=True)
+
+    # Não autenticado → tela de login
+    if not session.get("dev_ok"):
+        return render_template("dev_login.html", erro=False)
+
+    notas = listar_notas_dev()
+    return render_template("dev.html", notas=notas, now=datetime.now())
+
+
+@app.route("/dev/nota", methods=["POST"])
+def dev_nota():
+    if not session.get("dev_ok"):
+        return redirect(url_for("dev_page"))
+    titulo = request.form.get("titulo", "").strip() or "Sem título"
+    texto  = request.form.get("texto", "").strip()
+    if texto:
+        salvar_nota_dev(titulo, texto)
+    return redirect(url_for("dev_page"))
+
+
+@app.route("/dev/sair")
+def dev_sair():
+    session.pop("dev_ok", None)
+    return redirect(url_for("dev_page"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

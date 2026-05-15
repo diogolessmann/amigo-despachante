@@ -256,6 +256,13 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_os_criado   ON ordens_servico(criado_em DESC);
         CREATE INDEX IF NOT EXISTS idx_veiculo_placa ON veiculos(placa);
         CREATE INDEX IF NOT EXISTS idx_cliente_cpf   ON clientes(cpf);
+
+        CREATE TABLE IF NOT EXISTS dev_notes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo     TEXT    NOT NULL DEFAULT '',
+            texto      TEXT    NOT NULL,
+            created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
     conn.close()
@@ -508,6 +515,25 @@ def salvar_documento(os_id: int, tipo: str, titulo: str, campos: dict) -> int:
     id_ = cur.lastrowid
     conn.close()
     return id_
+
+def salvar_nota_dev(titulo: str, texto: str) -> int:
+    conn = get_conn()
+    cur  = conn.execute(
+        "INSERT INTO dev_notes (titulo, texto) VALUES (?, ?)", (titulo, texto)
+    )
+    conn.commit()
+    id_ = cur.lastrowid
+    conn.close()
+    return id_
+
+def listar_notas_dev() -> list:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM dev_notes ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 
 def get_documentos_os(os_id: int) -> list:
     import json
